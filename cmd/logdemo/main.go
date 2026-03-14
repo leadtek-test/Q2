@@ -2,28 +2,63 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"q2/pkg/logging"
 	filestore "q2/pkg/logging/store/file"
 	"q2/pkg/logging/store/memory"
 )
 
-func main() {
-	backend := flag.String("backend", "memory", "storage backend: memory or file")
-	filePath := flag.String("file", "tmp/logdemo/logs.jsonl", "path for the file backend")
-	format := flag.String("format", "text", "output format: text or json")
-	clearLogs := flag.Bool("clear", false, "clear logs at the end of demo")
-	flag.Parse()
+type demoOptions struct {
+	backend  string
+	filePath string
+	format   string
+	clear    bool
+}
 
-	store, cleanup, err := newStore(*backend, *filePath)
+func main() {
+	cmd := newRootCmd()
+	cmd.SetArgs(normalizeLegacyLongFlags(os.Args[1:]))
+
+	if err := cmd.Execute(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func newRootCmd() *cobra.Command {
+	opts := demoOptions{}
+
+	cmd := &cobra.Command{
+		Use:          "logdemo",
+		Short:        "Run logging system demo",
+		SilenceUsage: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 0 {
+				return fmt.Errorf("unexpected arguments: %v", args)
+			}
+			return runDemo(cmd.Context(), opts)
+		},
+	}
+
+	flags := cmd.Flags()
+	flags.StringVar(&opts.backend, "backend", "memory", "storage backend: memory or file")
+	flags.StringVar(&opts.filePath, "file", "tmp/logdemo/logs.jsonl", "path for the file backend")
+	flags.StringVar(&opts.format, "format", "text", "output format: text or json")
+	flags.BoolVar(&opts.clear, "clear", false, "clear logs at the end of demo")
+
+	return cmd
+}
+
+func runDemo(ctx context.Context, opts demoOptions) error {
+	store, cleanup, err := newStore(opts.backend, opts.filePath)
 	if err != nil {
-		log.Fatalf("create store: %v", err)
+		return fmt.Errorf("create store: %w", err)
 	}
 	defer cleanup()
 
@@ -37,14 +72,14 @@ func main() {
 		}),
 	)
 	if err != nil {
-		log.Fatalf("create manager: %v", err)
+		return fmt.Errorf("create manager: %w", err)
 	}
-	if err := setFormatter(manager, *format); err != nil {
-		log.Fatalf("set formatter: %v", err)
+	if err := setFormatter(manager, opts.format); err != nil {
+		return fmt.Errorf("set formatter: %w", err)
 	}
 	defer func() {
-		if err = manager.Close(context.Background()); err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "close manager: %v\n", err)
+		if closeErr := manager.Close(ctx); closeErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "close manager: %v\n", closeErr)
 		}
 	}()
 
@@ -55,15 +90,27 @@ func main() {
 	}))
 
 	start := time.Now().UTC()
-	must(manager.WriteLog(logging.LevelDebug.String(), "debug is filtered by default min level"))
-	must(manager.WriteLog(logging.LevelInfo.String(), "service booted"))
-	must(manager.WriteLog(logging.LevelWarn.String(), "cache response is slow"))
-	must(manager.WriteLog(logging.LevelError.String(), "job failed"))
-	must(manager.Flush(context.Background()))
+	if err := manager.WriteLog(logging.LevelDebug.String(), "debug is filtered by default min level"); err != nil {
+		return err
+	}
+	if err := manager.WriteLog(logging.LevelInfo.String(), "service booted"); err != nil {
+		return err
+	}
+	if err := manager.WriteLog(logging.LevelWarn.String(), "cache response is slow"); err != nil {
+		return err
+	}
+	if err := manager.WriteLog(logging.LevelError.String(), "job failed"); err != nil {
+		return err
+	}
+	if err := manager.Flush(ctx); err != nil {
+		return err
+	}
 
 	fmt.Println("== all persisted logs ==")
 	allEntries, err := manager.ReadFormattedLogs("", logging.LogFilter{})
-	must(err)
+	if err != nil {
+		return err
+	}
 	printEntries(allEntries)
 
 	fmt.Println("== warn logs in range ==")
@@ -71,18 +118,26 @@ func main() {
 		Start: start.Add(-time.Second),
 		End:   time.Now().UTC().Add(time.Second),
 	})
-	must(err)
+	if err != nil {
+		return err
+	}
 	printEntries(warnEntries)
 
-	if *clearLogs {
-		must(manager.ClearLogs(time.Now().UTC().Add(time.Second)))
+	if opts.clear {
+		if err := manager.ClearLogs(time.Now().UTC().Add(time.Second)); err != nil {
+			return err
+		}
 	}
 	remaining, err := manager.ReadFormattedLogs("", logging.LogFilter{})
-	must(err)
+	if err != nil {
+		return err
+	}
 
 	fmt.Println("== remaining logs ==")
 	printEntries(remaining)
 	fmt.Printf("handler processed %d entries\n", handled)
+
+	return nil
 }
 
 func newStore(backend string, filePath string) (logging.LogStore, func(), error) {
@@ -122,8 +177,27 @@ func printEntries(entries []string) {
 	}
 }
 
-func must(err error) {
-	if err != nil {
-		log.Fatal(err)
+func normalizeLegacyLongFlags(args []string) []string {
+	normalized := make([]string, 0, len(args))
+	for _, arg := range args {
+		if isLegacyLongFlag(arg) {
+			normalized = append(normalized, "-"+arg)
+			continue
+		}
+
+		normalized = append(normalized, arg)
 	}
+
+	return normalized
+}
+
+func isLegacyLongFlag(arg string) bool {
+	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	if len(arg) <= 2 {
+		return false
+	}
+
+	return arg[1] >= 'a' && arg[1] <= 'z'
 }
