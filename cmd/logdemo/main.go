@@ -11,14 +11,20 @@ import (
 
 	"q2/pkg/logging"
 	filestore "q2/pkg/logging/store/file"
+	influxstore "q2/pkg/logging/store/influxdb"
 	"q2/pkg/logging/store/memory"
 )
 
 type demoOptions struct {
-	backend  string
-	filePath string
-	format   string
-	clear    bool
+	backend           string
+	filePath          string
+	format            string
+	clear             bool
+	influxURL         string
+	influxToken       string
+	influxOrg         string
+	influxBucket      string
+	influxMeasurement string
 }
 
 func main() {
@@ -47,16 +53,21 @@ func newRootCmd() *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&opts.backend, "backend", "memory", "storage backend: memory or file")
+	flags.StringVar(&opts.backend, "backend", "memory", "storage backend: memory, file, or influx")
 	flags.StringVar(&opts.filePath, "file", "tmp/logdemo/logs.jsonl", "path for the file backend")
 	flags.StringVar(&opts.format, "format", "text", "output format: text or json")
 	flags.BoolVar(&opts.clear, "clear", false, "clear logs at the end of demo")
+	flags.StringVar(&opts.influxURL, "influx-url", "http://localhost:8086", "InfluxDB URL")
+	flags.StringVar(&opts.influxToken, "influx-token", "q2-dev-token", "InfluxDB token")
+	flags.StringVar(&opts.influxOrg, "influx-org", "q2", "InfluxDB organization")
+	flags.StringVar(&opts.influxBucket, "influx-bucket", "logging", "InfluxDB bucket")
+	flags.StringVar(&opts.influxMeasurement, "influx-measurement", "logs", "InfluxDB measurement")
 
 	return cmd
 }
 
 func runDemo(ctx context.Context, opts demoOptions) error {
-	store, cleanup, err := newStore(opts.backend, opts.filePath)
+	store, cleanup, err := newStore(ctx, opts.backend, opts.filePath, opts)
 	if err != nil {
 		return fmt.Errorf("create store: %w", err)
 	}
@@ -140,13 +151,27 @@ func runDemo(ctx context.Context, opts demoOptions) error {
 	return nil
 }
 
-func newStore(backend string, filePath string) (logging.LogStore, func(), error) {
-	switch backend {
+func newStore(ctx context.Context, backend string, filePath string, opts demoOptions) (logging.LogStore, func(), error) {
+	switch strings.ToLower(strings.TrimSpace(backend)) {
 	case "memory":
 		store := memory.NewStore()
 		return store, func() {}, nil
 	case "file":
 		store, err := filestore.NewStore(filePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		return store, func() {
+			_ = store.Close()
+		}, nil
+	case "influx", "influxdb", "tsdb":
+		store, err := influxstore.NewStore(ctx, influxstore.Config{
+			URL:         opts.influxURL,
+			Token:       opts.influxToken,
+			Org:         opts.influxOrg,
+			Bucket:      opts.influxBucket,
+			Measurement: opts.influxMeasurement,
+		})
 		if err != nil {
 			return nil, nil, err
 		}

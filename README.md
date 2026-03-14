@@ -6,7 +6,7 @@
 ## Features
 
 - `LogManager` 提供統一入口，負責 level 驗證、非同步入隊、handler 分派。
-- `LogStore` 介面可切換不同儲存後端，目前提供 `memory` 與 `file`。
+- `LogStore` 介面可切換不同儲存後端，目前提供 `memory`、`file`、`influxdb`。
 - 分級日誌支援 `DEBUG`、`INFO`、`WARN`、`ERROR`，預設最小等級為 `INFO`。
 - `Flush()` 與 `Close()` 讓非同步流程在測試與整合時可控。
 - `WriteLogWithAttrs()` 支援 structured logging 欄位寫入。
@@ -14,6 +14,7 @@
 - `LogHandler` 提供後續擴充點，方便接遠端聚合、分析、告警等需求。
 - `FileStore` 使用 JSONL，保留未來擴充 structured logging 的空間。
 - `FileStore` 改為 buffered write + `Flush()`，降低 syscall 與 GC 壓力。
+- `InfluxDB Store` 使用時序資料庫，適合高吞吐 log 事件儲存與時間區間查詢。
 
 ## Project Layout
 
@@ -23,6 +24,7 @@
 ├── pkg/logging                # 公開型別、介面與 LogManager
 └── pkg/logging/store
     ├── file                   # JSONL file backend
+    ├── influxdb               # InfluxDB time-series backend
     └── memory                 # in-memory backend
 ```
 
@@ -65,7 +67,26 @@ go run ./cmd/logdemo -backend=memory
 go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl
 go run ./cmd/logdemo -backend=memory -format=json
 go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl -clear=true
+go run ./cmd/logdemo -backend=influx \
+  --influx-url=http://localhost:8086 \
+  --influx-token=q2-dev-token \
+  --influx-org=q2 \
+  --influx-bucket=logging
 ```
+
+## Run InfluxDB (Docker Compose)
+
+```bash
+docker compose up -d influxdb
+docker compose ps
+```
+
+預設初始化參數（定義於 `docker-compose.yml`）：
+
+- URL: `http://localhost:8086`
+- Org: `q2`
+- Bucket: `logging`
+- Token: `q2-dev-token`
 
 CLI demo 會展示：
 
@@ -88,5 +109,5 @@ go test ./...
 - manager 非同步寫入、queue full、關閉後寫入
 - handler 失敗隔離
 - 多 goroutine 寫入
-- memory/file store 讀取、過濾、清理
+- memory/file/influxdb store 讀取、過濾、清理
 - CLI demo 整合測試
