@@ -226,6 +226,63 @@ func TestManagerSetFormatterToJSON(t *testing.T) {
 	}
 }
 
+func TestManagerWriteLogWithAttrsClonesInput(t *testing.T) {
+	t.Parallel()
+
+	store := memory.NewStore()
+	manager := newTestManager(t, store)
+
+	attrs := map[string]any{
+		"trace_id": "trace-1",
+		"service":  "api",
+	}
+	if err := manager.WriteLogWithAttrs("INFO", "request finished", attrs); err != nil {
+		t.Fatalf("WriteLogWithAttrs() error = %v", err)
+	}
+
+	attrs["trace_id"] = "mutated"
+
+	if err := manager.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	entries, err := manager.ReadLogs("INFO", logging.LogFilter{})
+	if err != nil {
+		t.Fatalf("ReadLogs() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ReadLogs() len = %d, want 1", len(entries))
+	}
+	if got := entries[0].Attrs["trace_id"]; got != "trace-1" {
+		t.Fatalf("entry attrs trace_id = %v, want trace-1", got)
+	}
+}
+
+func TestManagerFlushCallsStoreFlush(t *testing.T) {
+	t.Parallel()
+
+	store := &flushAwareStore{}
+	manager := newTestManager(t, store)
+
+	if err := manager.WriteLog("INFO", "service started"); err != nil {
+		t.Fatalf("WriteLog() error = %v", err)
+	}
+	if err := manager.Flush(context.Background()); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	entries, err := manager.ReadLogs("INFO", logging.LogFilter{})
+	if err != nil {
+		t.Fatalf("ReadLogs() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("ReadLogs() len = %d, want 1", len(entries))
+	}
+	if got := store.flushCount.Load(); got == 0 {
+		t.Fatalf("flush count = %d, want >= 1", got)
+	}
+}
+
 type blockingStore struct {
 	started atomic.Int32
 	release chan struct{}
@@ -257,6 +314,49 @@ func (s *blockingStore) Read(level logging.Level, filter logging.LogFilter) ([]l
 }
 
 func (s *blockingStore) Clear(before time.Time) error {
+	return nil
+}
+
+type flushAwareStore struct {
+	mu         sync.Mutex
+	pending    []logging.LogEntry
+	committed  []logging.LogEntry
+	flushCount atomic.Int32
+}
+
+func (s *flushAwareStore) Write(entry logging.LogEntry) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = append(s.pending, entry)
+	return nil
+}
+
+func (s *flushAwareStore) Read(level logging.Level, filter logging.LogFilter) ([]logging.LogEntry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]logging.LogEntry, 0, len(s.committed))
+	for _, entry := range s.committed {
+		if logging.MatchEntry(entry, level, filter) {
+			out = append(out, entry)
+		}
+	}
+	return out, nil
+}
+
+func (s *flushAwareStore) Clear(before time.Time) error {
+	return nil
+}
+
+func (s *flushAwareStore) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.pending) != 0 {
+		s.committed = append(s.committed, s.pending...)
+		s.pending = s.pending[:0]
+	}
+	s.flushCount.Add(1)
 	return nil
 }
 

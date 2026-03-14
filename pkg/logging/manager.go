@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -69,8 +70,9 @@ type Manager struct {
 }
 
 type queueItem struct {
-	entry   *LogEntry
-	barrier chan struct{}
+	entry    LogEntry
+	hasEntry bool
+	barrier  chan struct{}
 }
 
 func NewManager(store LogStore, opts ...Option) (*Manager, error) {
@@ -124,6 +126,14 @@ func (m *Manager) SetFormatter(formatter Formatter) {
 }
 
 func (m *Manager) WriteLog(level string, message string) error {
+	return m.writeLog(level, message, nil)
+}
+
+func (m *Manager) WriteLogWithAttrs(level string, message string, attrs map[string]any) error {
+	return m.writeLog(level, message, attrs)
+}
+
+func (m *Manager) writeLog(level string, message string, attrs map[string]any) error {
 	parsedLevel, err := ParseLevel(level)
 	if err != nil {
 		return err
@@ -141,9 +151,10 @@ func (m *Manager) WriteLog(level string, message string) error {
 		Level:     parsedLevel,
 		Message:   message,
 		Source:    m.source,
+		Attrs:     cloneAttrs(attrs),
 	}
 
-	return m.enqueue(queueItem{entry: &entry})
+	return m.enqueue(queueItem{entry: entry, hasEntry: true})
 }
 
 func (m *Manager) ReadLogs(level string, filter LogFilter) ([]LogEntry, error) {
@@ -184,7 +195,11 @@ func (m *Manager) ReadFormattedLogs(level string, filter LogFilter) ([]string, e
 
 func (m *Manager) Flush(ctx context.Context) error {
 	m.enqueueMu.Lock()
-	return m.flushLocked(ctx)
+	if err := m.flushLocked(ctx); err != nil {
+		return err
+	}
+
+	return m.flushStore()
 }
 
 func (m *Manager) Close(ctx context.Context) error {
@@ -208,7 +223,7 @@ func (m *Manager) Close(ctx context.Context) error {
 
 	select {
 	case <-m.workerDone:
-		return nil
+		return m.flushStore()
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -255,7 +270,12 @@ func (m *Manager) flushLocked(ctx context.Context) error {
 
 func (m *Manager) nextID() string {
 	sequence := m.sequence.Add(1)
-	return fmt.Sprintf("%d-%d", time.Now().UTC().UnixNano(), sequence)
+	var buffer [48]byte
+	out := buffer[:0]
+	out = strconv.AppendInt(out, time.Now().UTC().UnixNano(), 10)
+	out = append(out, '-')
+	out = strconv.AppendUint(out, sequence, 10)
+	return string(out)
 }
 
 func (m *Manager) run() {
@@ -267,11 +287,11 @@ func (m *Manager) run() {
 			continue
 		}
 
-		if item.entry == nil {
+		if !item.hasEntry {
 			continue
 		}
 
-		entry := cloneEntry(*item.entry)
+		entry := cloneEntry(item.entry)
 		if err := m.store.Write(entry); err != nil {
 			m.onError(err)
 			continue
@@ -307,4 +327,18 @@ func normalizeFormatter(formatter Formatter) Formatter {
 	}
 
 	return formatter
+}
+
+func (m *Manager) flushStore() error {
+	flusher, ok := m.store.(LogStoreFlusher)
+	if !ok {
+		return nil
+	}
+
+	if err := flusher.Flush(); err != nil {
+		m.onError(err)
+		return err
+	}
+
+	return nil
 }

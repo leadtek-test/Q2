@@ -9,9 +9,11 @@
 - `LogStore` 介面可切換不同儲存後端，目前提供 `memory` 與 `file`。
 - 分級日誌支援 `DEBUG`、`INFO`、`WARN`、`ERROR`，預設最小等級為 `INFO`。
 - `Flush()` 與 `Close()` 讓非同步流程在測試與整合時可控。
+- `WriteLogWithAttrs()` 支援 structured logging 欄位寫入。
 - `SetFormatter()` 可切換 `TextFormatter`（預設）或 `JsonFormatter`。
 - `LogHandler` 提供後續擴充點，方便接遠端聚合、分析、告警等需求。
 - `FileStore` 使用 JSONL，保留未來擴充 structured logging 的空間。
+- `FileStore` 改為 buffered write + `Flush()`，降低 syscall 與 GC 壓力。
 
 ## Project Layout
 
@@ -43,6 +45,14 @@ type LogHandler interface {
 type Formatter interface {
     Format(entry LogEntry) (string, error)
 }
+```
+
+```go
+// structured logging example
+_ = manager.WriteLogWithAttrs("INFO", "request finished", map[string]any{
+    "trace_id": "abc-123",
+    "latency_ms": 42,
+})
 ```
 
 `LogEntry` 包含 `ID`、`Timestamp`、`Level`、`Message`、`Source`、`Attrs`。  

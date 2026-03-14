@@ -87,6 +87,10 @@ type LogStore interface {
 	LogReader
 }
 
+type LogStoreFlusher interface {
+	Flush() error
+}
+
 type LogHandler interface {
 	Handle(entry LogEntry) error
 }

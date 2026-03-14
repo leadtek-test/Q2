@@ -1,7 +1,9 @@
 package filestore_test
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,5 +65,41 @@ func TestStoreWriteReadReopenAndClear(t *testing.T) {
 	}
 	if len(remaining) != 1 || remaining[0].ID != "3" {
 		t.Fatalf("remaining = %+v, want only latest entry", remaining)
+	}
+}
+
+func TestStoreFlushPersistsBufferedWrites(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "buffered.jsonl")
+	store, err := filestore.NewStore(path)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	})
+
+	entry := logging.LogEntry{
+		ID:        "buffered-1",
+		Timestamp: time.Date(2026, 3, 14, 10, 0, 0, 0, time.UTC),
+		Level:     logging.LevelInfo,
+		Message:   "buffered write",
+	}
+	if err := store.Write(entry); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if err := store.Flush(); err != nil {
+		t.Fatalf("Flush() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(data), "\"buffered write\"") {
+		t.Fatalf("file content = %q, want buffered entry", string(data))
 	}
 }

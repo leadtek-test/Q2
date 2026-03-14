@@ -3,6 +3,7 @@ package filestore
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,11 +14,14 @@ import (
 )
 
 const scannerBufferSize = 1024 * 1024
+const writeBufferSize = 256 * 1024
 
 type Store struct {
-	mu   sync.Mutex
-	path string
-	file *os.File
+	mu      sync.Mutex
+	path    string
+	file    *os.File
+	writer  *bufio.Writer
+	encoder *json.Encoder
 }
 
 func NewStore(path string) (*Store, error) {
@@ -35,8 +39,9 @@ func NewStore(path string) (*Store, error) {
 	}
 
 	return &Store{
-		path: path,
-		file: file,
+		path:   path,
+		file:   file,
+		writer: bufio.NewWriterSize(file, writeBufferSize),
 	}, nil
 }
 
@@ -44,13 +49,30 @@ func (s *Store) Write(entry logging.LogEntry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	encoder := json.NewEncoder(s.file)
-	return encoder.Encode(entry)
+	if s.file == nil || s.writer == nil {
+		return errors.New("file store is closed")
+	}
+	if s.encoder == nil {
+		s.encoder = json.NewEncoder(s.writer)
+	}
+
+	return s.encoder.Encode(entry)
+}
+
+func (s *Store) Flush() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.flushLocked()
 }
 
 func (s *Store) Read(level logging.Level, filter logging.LogFilter) ([]logging.LogEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.flushLocked(); err != nil {
+		return nil, err
+	}
 
 	file, err := os.Open(s.path)
 	if err != nil {
@@ -90,6 +112,10 @@ func (s *Store) Read(level logging.Level, filter logging.LogFilter) ([]logging.L
 func (s *Store) Clear(before time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if err := s.flushLocked(); err != nil {
+		return err
+	}
 
 	input, err := os.Open(s.path)
 	if err != nil {
@@ -148,6 +174,8 @@ func (s *Store) Clear(before time.Time) error {
 	}
 
 	s.file = file
+	s.writer = bufio.NewWriterSize(file, writeBufferSize)
+	s.encoder = json.NewEncoder(s.writer)
 	return nil
 }
 
@@ -158,7 +186,20 @@ func (s *Store) Close() error {
 	if s.file == nil {
 		return nil
 	}
+	if err := s.flushLocked(); err != nil {
+		return err
+	}
 	err := s.file.Close()
 	s.file = nil
+	s.writer = nil
+	s.encoder = nil
 	return err
+}
+
+func (s *Store) flushLocked() error {
+	if s.writer == nil {
+		return nil
+	}
+
+	return s.writer.Flush()
 }
