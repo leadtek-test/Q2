@@ -18,17 +18,22 @@ func TestLogDemo(t *testing.T) {
 		{
 			name:  "memory",
 			args:  []string{"run", "./cmd/logdemo", "-backend=memory"},
-			wants: []string{"== all persisted logs ==", "== remaining after clear ==", "handler processed 3 entries", " INFO service booted"},
+			wants: []string{"== all persisted logs ==", "== remaining logs ==", "handler processed 3 entries", " INFO service booted"},
 		},
 		{
 			name:  "file",
 			args:  []string{"run", "./cmd/logdemo", "-backend=file", "-file=" + filepath.Join(t.TempDir(), "demo.jsonl")},
-			wants: []string{"== all persisted logs ==", "== remaining after clear ==", "handler processed 3 entries", " INFO service booted"},
+			wants: []string{"== all persisted logs ==", "== remaining logs ==", "handler processed 3 entries", " INFO service booted"},
 		},
 		{
 			name:  "json format",
 			args:  []string{"run", "./cmd/logdemo", "-backend=memory", "-format=json"},
-			wants: []string{"== all persisted logs ==", "== remaining after clear ==", "handler processed 3 entries", "\"message\":\"service booted\""},
+			wants: []string{"== all persisted logs ==", "== remaining logs ==", "handler processed 3 entries", "\"message\":\"service booted\""},
+		},
+		{
+			name:  "clear logs",
+			args:  []string{"run", "./cmd/logdemo", "-backend=file", "-file=" + filepath.Join(t.TempDir(), "demo-clear.jsonl"), "-clear=true"},
+			wants: []string{"== all persisted logs ==", "== remaining logs ==", "handler processed 3 entries"},
 		},
 	}
 

@@ -18,6 +18,7 @@ func main() {
 	backend := flag.String("backend", "memory", "storage backend: memory or file")
 	filePath := flag.String("file", "tmp/logdemo/logs.jsonl", "path for the file backend")
 	format := flag.String("format", "text", "output format: text or json")
+	clearLogs := flag.Bool("clear", false, "clear logs at the end of demo")
 	flag.Parse()
 
 	store, cleanup, err := newStore(*backend, *filePath)
@@ -73,11 +74,13 @@ func main() {
 	must(err)
 	printEntries(warnEntries)
 
-	must(manager.ClearLogs(time.Now().UTC().Add(time.Second)))
+	if *clearLogs {
+		must(manager.ClearLogs(time.Now().UTC().Add(time.Second)))
+	}
 	remaining, err := manager.ReadFormattedLogs("", logging.LogFilter{})
 	must(err)
 
-	fmt.Println("== remaining after clear ==")
+	fmt.Println("== remaining logs ==")
 	printEntries(remaining)
 	fmt.Printf("handler processed %d entries\n", handled)
 }

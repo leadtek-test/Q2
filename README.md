@@ -54,6 +54,7 @@ type Formatter interface {
 go run ./cmd/logdemo -backend=memory
 go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl
 go run ./cmd/logdemo -backend=memory -format=json
+go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl -clear=true
 ```
 
 CLI demo 會展示：
@@ -62,7 +63,7 @@ CLI demo 會展示：
 - `SetFormatter()` 切換輸出格式（text/json）
 - `Flush()` 後查詢 persisted logs（可用 `ReadFormattedLogs` 取得格式化後輸出）
 - 依 level + time range 讀取
-- `ClearLogs()` 清理舊資料
+- 預設保留寫入檔案內容，若加上 `-clear=true` 才會呼叫 `ClearLogs()` 清理舊資料
 - 註冊 handler 並輸出處理結果
 
 ## Test
