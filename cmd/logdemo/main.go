@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	filestore "q2/pkg/logging/store/file"
 	influxstore "q2/pkg/logging/store/influxdb"
 	"q2/pkg/logging/store/memory"
+	multistore "q2/pkg/logging/store/multi"
 )
 
 type demoOptions struct {
@@ -53,7 +55,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&opts.backend, "backend", "memory", "storage backend: memory, file, or influx")
+	flags.StringVar(&opts.backend, "backend", "memory", "storage backend(s), comma-separated: memory,file,influx")
 	flags.StringVar(&opts.filePath, "file", "tmp/logdemo/logs.jsonl", "path for the file backend")
 	flags.StringVar(&opts.format, "format", "text", "output format: text or json")
 	flags.BoolVar(&opts.clear, "clear", false, "clear logs at the end of demo")
@@ -152,6 +154,45 @@ func runDemo(ctx context.Context, opts demoOptions) error {
 }
 
 func newStore(ctx context.Context, backend string, filePath string, opts demoOptions) (logging.LogStore, func(), error) {
+	backends := parseBackends(backend)
+	if len(backends) == 0 {
+		return nil, nil, errors.New("at least one backend is required")
+	}
+
+	if len(backends) == 1 {
+		return newSingleStore(ctx, backends[0], filePath, opts)
+	}
+
+	stores := make([]logging.LogStore, 0, len(backends))
+	cleanups := make([]func(), 0, len(backends))
+	for _, backendName := range backends {
+		store, cleanup, err := newSingleStore(ctx, backendName, filePath, opts)
+		if err != nil {
+			for i := len(cleanups) - 1; i >= 0; i-- {
+				cleanups[i]()
+			}
+			return nil, nil, err
+		}
+		stores = append(stores, store)
+		cleanups = append(cleanups, cleanup)
+	}
+
+	store, err := multistore.NewStore(stores)
+	if err != nil {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+		return nil, nil, err
+	}
+
+	return store, func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}, nil
+}
+
+func newSingleStore(ctx context.Context, backend string, filePath string, opts demoOptions) (logging.LogStore, func(), error) {
 	switch strings.ToLower(strings.TrimSpace(backend)) {
 	case "memory":
 		store := memory.NewStore()
@@ -181,6 +222,26 @@ func newStore(ctx context.Context, backend string, filePath string, opts demoOpt
 	default:
 		return nil, nil, fmt.Errorf("unsupported backend %q", backend)
 	}
+}
+
+func parseBackends(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		name := strings.ToLower(strings.TrimSpace(part))
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+
+	return out
 }
 
 func setFormatter(manager *logging.Manager, format string) error {

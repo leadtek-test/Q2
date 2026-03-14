@@ -6,7 +6,7 @@
 ## Features
 
 - `LogManager` 提供統一入口，負責 level 驗證、非同步入隊、handler 分派。
-- `LogStore` 介面可切換不同儲存後端，目前提供 `memory`、`file`、`influxdb`。
+- `LogStore` 介面可切換不同儲存後端，目前提供 `memory`、`file`、`influxdb`，且可同時啟用多個 backend。
 - 分級日誌支援 `DEBUG`、`INFO`、`WARN`、`ERROR`，預設最小等級為 `INFO`。
 - `Flush()` 與 `Close()` 讓非同步流程在測試與整合時可控。
 - `WriteLogWithAttrs()` 支援 structured logging 欄位寫入。
@@ -25,6 +25,7 @@
 └── pkg/logging/store
     ├── file                   # JSONL file backend
     ├── influxdb               # InfluxDB time-series backend
+    ├── multi                  # multi-store fan-out backend
     └── memory                 # in-memory backend
 ```
 
@@ -67,7 +68,14 @@ go run ./cmd/logdemo -backend=memory
 go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl
 go run ./cmd/logdemo -backend=memory -format=json
 go run ./cmd/logdemo -backend=file -file=tmp/logdemo/logs.jsonl -clear=true
+go run ./cmd/logdemo -backend=memory,file -file=tmp/logdemo/logs.jsonl
 go run ./cmd/logdemo -backend=influx \
+  --influx-url=http://localhost:8086 \
+  --influx-token=q2-dev-token \
+  --influx-org=q2 \
+  --influx-bucket=logging
+go run ./cmd/logdemo -backend=file,influx \
+  --file=tmp/logdemo/logs.jsonl \
   --influx-url=http://localhost:8086 \
   --influx-token=q2-dev-token \
   --influx-org=q2 \
@@ -95,6 +103,7 @@ CLI demo 會展示：
 - `Flush()` 後查詢 persisted logs（可用 `ReadFormattedLogs` 取得格式化後輸出）
 - 依 level + time range 讀取
 - 預設保留寫入檔案內容，若加上 `-clear=true` 才會呼叫 `ClearLogs()` 清理舊資料
+- `-backend` 支援逗號分隔（例如 `file,influx`），可同時寫入多個 store
 - 註冊 handler 並輸出處理結果
 
 ## Test
